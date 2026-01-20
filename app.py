@@ -95,6 +95,15 @@ if 'edit_item_id' not in st.session_state:
     st.session_state.edit_item_id = None
 if 'show_add_form' not in st.session_state:
     st.session_state.show_add_form = False
+if 'show_new_property_form' not in st.session_state:
+    st.session_state.show_new_property_form = False
+if 'current_property_id' not in st.session_state:
+    # Get the first active property as default
+    active_properties = db.get_active_properties()
+    if active_properties:
+        st.session_state.current_property_id = active_properties[0]['id']
+    else:
+        st.session_state.current_property_id = None
 
 def format_status_badge(status):
     """Return HTML for status badge"""
@@ -114,10 +123,12 @@ def create_progress_chart(stats):
     values = []
     colors = []
 
+    flagged_count = stats['flagged'] if 'flagged' in stats.keys() else 0
+
     status_config = [
         ("Complete", stats['complete'], "#28a745"),
-        ("In Progress", stats['total'] - stats['complete'] - stats.get('flagged', 0), "#ffc107"),
-        ("Issue Flagged", stats.get('flagged', 0), "#dc3545")
+        ("In Progress", stats['total'] - stats['complete'] - flagged_count, "#ffc107"),
+        ("Issue Flagged", flagged_count, "#dc3545")
     ]
 
     for label, value, color in status_config:
@@ -147,21 +158,77 @@ def create_progress_chart(stats):
 
 def dashboard_view():
     """Display the main dashboard with summary and progress"""
-    st.title("📊 Due Diligence Dashboard")
+    property_id = st.session_state.get('current_property_id')
 
-    # Property name with edit capability
-    col1, col2 = st.columns([3, 1])
+    if not property_id:
+        st.warning("⚠️ Please select or create a property to view the dashboard.")
+        return
+
+    property_info = db.get_property_by_id(property_id)
+    if not property_info:
+        st.error("Property not found. Please select a different property.")
+        return
+
+    st.title(f"📊 Due Diligence Dashboard - {property_info['name']}")
+
+    # Display property details
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        property_name = db.get_property_name()
-        new_property_name = st.text_input("Property Name:", value=property_name, key="property_name_input")
-        if new_property_name != property_name:
-            db.update_property_name(new_property_name)
-            st.rerun()
+        if property_info['address']:
+            st.caption(f"📍 {property_info['address']}")
+    with col2:
+        if property_info['asset_type']:
+            st.caption(f"🏢 {property_info['asset_type']}")
+    with col3:
+        if st.button("💾 Save as Template", key="save_template_btn", use_container_width=True):
+            st.session_state.show_save_template_form = True
+
+    # Save as Template Form
+    if st.session_state.get('show_save_template_form', False):
+        with st.form("save_template_form"):
+            st.subheader("💾 Save Checklist as Template")
+
+            template_name = st.text_input("Template Name*",
+                placeholder=f"e.g., {property_info['asset_type']} DD Checklist" if property_info['asset_type'] else "Custom DD Checklist")
+
+            template_description = st.text_area("Description (optional)",
+                placeholder="Describe when to use this template...")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                submitted = st.form_submit_button("✅ Save Template", use_container_width=True)
+
+            with col2:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+            if submitted:
+                if not template_name:
+                    st.error("Template name is required!")
+                else:
+                    try:
+                        template_id = db.save_property_as_template(
+                            property_id,
+                            template_name,
+                            template_description
+                        )
+                        if template_id:
+                            st.success(f"✅ Template '{template_name}' saved successfully!")
+                            st.session_state.show_save_template_form = False
+                            st.rerun()
+                        else:
+                            st.error("Failed to save template. Please try again.")
+                    except Exception as e:
+                        st.error(f"Error saving template: {str(e)}")
+
+            if cancelled:
+                st.session_state.show_save_template_form = False
+                st.rerun()
 
     st.markdown("---")
 
     # Overall statistics
-    stats = db.get_overall_stats()
+    stats = db.get_overall_stats(property_id)
     total = stats['total']
     complete = stats['complete']
     flagged = stats['flagged']
@@ -211,7 +278,7 @@ def dashboard_view():
 
     with col2:
         st.subheader("Flagged Issues")
-        flagged_items = db.get_flagged_items()
+        flagged_items = db.get_flagged_items(property_id)
         if flagged_items:
             for item in flagged_items:
                 st.markdown(f"""
@@ -228,7 +295,7 @@ def dashboard_view():
 
     # Items due soon
     st.subheader("⏰ Items Due in Next 7 Days")
-    due_soon = db.get_items_due_soon(7)
+    due_soon = db.get_items_due_soon(property_id, 7)
     if due_soon:
         due_df = pd.DataFrame([dict(item) for item in due_soon])
         due_df = due_df[['category', 'item_name', 'status', 'responsible_party', 'due_date']]
@@ -241,7 +308,7 @@ def dashboard_view():
 
     # Category breakdown
     st.subheader("📋 Status by Category")
-    summary = db.get_summary_by_category()
+    summary = db.get_summary_by_category(property_id)
 
     if summary:
         summary_data = []
@@ -288,7 +355,18 @@ def dashboard_view():
 
 def detail_view():
     """Display detailed list view with filtering and editing"""
-    st.title("📝 Detailed Item List")
+    property_id = st.session_state.get('current_property_id')
+
+    if not property_id:
+        st.warning("⚠️ Please select or create a property to view items.")
+        return
+
+    property_info = db.get_property_by_id(property_id)
+    if not property_info:
+        st.error("Property not found. Please select a different property.")
+        return
+
+    st.title(f"📝 Detailed Item List - {property_info['name']}")
 
     # Filters
     col1, col2, col3 = st.columns([2, 2, 1])
@@ -317,6 +395,7 @@ def detail_view():
 
     # Get filtered items
     items = db.get_items_by_filters(
+        property_id,
         category=selected_category if selected_category != "All" else None,
         status=selected_status if selected_status != "All" else None
     )
@@ -445,6 +524,7 @@ def show_edit_form():
                     st.success(f"✅ Updated: {item_name}")
                 else:
                     db.add_new_item(
+                        st.session_state.current_property_id,
                         final_category,
                         item_name,
                         status,
@@ -463,15 +543,26 @@ def show_edit_form():
             st.session_state.show_add_form = False
             st.rerun()
 
-def generate_report():
-    """Generate a markdown report"""
-    property_name = db.get_property_name()
+def generate_report(property_id):
+    """Generate a markdown report for a specific property"""
+    property_info = db.get_property_by_id(property_id)
+    if not property_info:
+        return "Error: Property not found"
+
+    property_name = property_info['name']
     report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     report = f"""# Due Diligence Status Report
 ## {property_name}
 **Generated:** {report_date}
 
+"""
+    if property_info['address']:
+        report += f"**Address:** {property_info['address']}\n"
+    if property_info['asset_type']:
+        report += f"**Asset Type:** {property_info['asset_type']}\n"
+
+    report += """
 ---
 
 ## Executive Summary
@@ -479,7 +570,7 @@ def generate_report():
 """
 
     # Overall stats
-    stats = db.get_overall_stats()
+    stats = db.get_overall_stats(property_id)
     total = stats['total']
     complete = stats['complete']
     flagged = stats['flagged']
@@ -498,7 +589,7 @@ def generate_report():
 """
 
     # Category breakdown
-    summary = db.get_summary_by_category()
+    summary = db.get_summary_by_category(property_id)
     for row in summary:
         total_cat = row['total']
         complete_cat = row['complete']
@@ -517,7 +608,7 @@ def generate_report():
 
     # Flagged issues
     report += "\n---\n\n## 🚩 Flagged Issues\n\n"
-    flagged_items = db.get_flagged_items()
+    flagged_items = db.get_flagged_items(property_id)
     if flagged_items:
         for item in flagged_items:
             report += f"""
@@ -532,7 +623,7 @@ def generate_report():
 
     # Items due soon
     report += "\n---\n\n## ⏰ Items Due in Next 7 Days\n\n"
-    due_soon = db.get_items_due_soon(7)
+    due_soon = db.get_items_due_soon(property_id, 7)
     if due_soon:
         for item in due_soon:
             report += f"""
@@ -551,7 +642,18 @@ def generate_report():
 
 def reports_view():
     """Display reports and export options"""
-    st.title("📄 Reports & Export")
+    property_id = st.session_state.get('current_property_id')
+
+    if not property_id:
+        st.warning("⚠️ Please select or create a property to generate reports.")
+        return
+
+    property_info = db.get_property_by_id(property_id)
+    if not property_info:
+        st.error("Property not found. Please select a different property.")
+        return
+
+    st.title(f"📄 Reports & Export - {property_info['name']}")
 
     st.markdown("""
     Generate and export Due Diligence status reports in Markdown format.
@@ -571,7 +673,7 @@ def reports_view():
             st.session_state.report_generated = True
 
     if st.session_state.get('report_generated', False):
-        report = generate_report()
+        report = generate_report(property_id)
 
         st.subheader("Report Preview")
 
@@ -581,7 +683,7 @@ def reports_view():
         st.markdown("---")
 
         # Download button
-        property_name = db.get_property_name()
+        property_name = property_info['name']
         filename = f"DD_Report_{property_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.md"
 
         st.download_button(
@@ -592,9 +694,472 @@ def reports_view():
             use_container_width=False
         )
 
+def portfolio_view():
+    """Display portfolio-wide analytics and summary across all properties"""
+    st.title("📊 Portfolio Dashboard")
+
+    st.markdown("""
+    View aggregate analytics and status across all properties in your portfolio.
+    """)
+
+    st.markdown("---")
+
+    # Section 1: Portfolio Overview
+    st.subheader("Portfolio Overview")
+
+    portfolio_summary = db.get_portfolio_summary()
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "Total Properties",
+            f"{portfolio_summary['active_properties']} Active",
+            delta=f"{portfolio_summary['closed_properties']} Closed" if portfolio_summary['closed_properties'] > 0 else None
+        )
+
+    with col2:
+        st.metric(
+            "Overall Completion",
+            f"{portfolio_summary['completion_pct']:.0f}%",
+            delta=f"{portfolio_summary['complete_items']}/{portfolio_summary['total_items']} items"
+        )
+
+    with col3:
+        st.metric(
+            "Total Issues Flagged",
+            portfolio_summary['flagged_items'],
+            delta="Requires attention" if portfolio_summary['flagged_items'] > 0 else "All clear",
+            delta_color="inverse"
+        )
+
+    with col4:
+        at_risk_properties = db.get_properties_at_risk(days=3)
+        st.metric(
+            "Properties at Risk",
+            len(at_risk_properties),
+            delta=f"≥5 items due in 3 days" if len(at_risk_properties) > 0 else "None"
+        )
+
+    st.markdown("---")
+
+    # Section 2: Properties Summary Table
+    st.subheader("Properties Summary")
+
+    properties_stats = db.get_properties_with_stats()
+
+    if properties_stats:
+        # Create a more visual table with progress bars
+        for prop in properties_stats:
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([3, 2, 1, 1, 1])
+
+                with col1:
+                    # Property name with clickable link
+                    if st.button(f"📍 {prop['name']}", key=f"prop_{prop['id']}", use_container_width=True):
+                        st.session_state.current_property_id = prop['id']
+                        st.session_state.current_view = 'dashboard'
+                        st.rerun()
+
+                    # Address and type
+                    st.caption(f"{prop['asset_type'] or 'No type'} • {prop['address'] or 'No address'}")
+
+                with col2:
+                    # Progress bar
+                    total = prop['total_items']
+                    complete = prop['complete_items']
+                    completion_pct = (complete / total * 100) if total > 0 else 0
+
+                    st.progress(completion_pct / 100)
+                    st.caption(f"{completion_pct:.0f}% ({complete}/{total} items)")
+
+                with col3:
+                    # Flagged issues
+                    if prop['flagged_items'] > 0:
+                        st.markdown(f"🚩 **{prop['flagged_items']}** issues")
+                    else:
+                        st.caption("✅ No issues")
+
+                with col4:
+                    # Due soon
+                    if prop['due_soon_items'] > 0:
+                        st.markdown(f"⏰ **{prop['due_soon_items']}** due soon")
+                    else:
+                        st.caption("✅ On track")
+
+                with col5:
+                    # Last updated
+                    st.caption(f"Updated: {prop['last_updated'][:10]}")
+
+                st.markdown("---")
+    else:
+        st.info("No active properties found. Create a property to get started.")
+
+    # Section 3: Flagged Issues Rollup
+    st.subheader("🚩 All Flagged Issues Across Portfolio")
+
+    all_flagged = db.get_all_flagged_items_by_property()
+
+    if all_flagged:
+        current_property_name = None
+
+        for item in all_flagged:
+            # Group by property
+            if item['property_name'] != current_property_name:
+                current_property_name = item['property_name']
+                st.markdown(f"### {current_property_name}")
+
+            # Display flagged item
+            with st.expander(f"**{item['category']}**: {item['item_name']}"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"**Responsible:** {item['responsible_party'] or 'Unassigned'}")
+                    st.markdown(f"**Due Date:** {item['due_date'] or 'Not set'}")
+
+                with col2:
+                    st.markdown(f"**Status:** {item['status']}")
+                    st.markdown(f"**Updated:** {item['last_updated'][:10]}")
+
+                if item['notes']:
+                    st.markdown(f"**Notes:** {item['notes']}")
+    else:
+        st.success("✅ No issues flagged across the portfolio!")
+
+    st.markdown("---")
+
+    # Section 4: Category Performance Heatmap
+    st.subheader("📈 Category Performance Across Properties")
+
+    category_data = db.get_category_completion_by_property()
+
+    if category_data:
+        # Convert to DataFrame for easier manipulation
+        import pandas as pd
+
+        df = pd.DataFrame([
+            {
+                'Property': row['property_name'],
+                'Category': row['category'],
+                'Completion %': row['completion_pct']
+            }
+            for row in category_data
+        ])
+
+        # Pivot for heatmap
+        pivot_df = df.pivot(index='Category', columns='Property', values='Completion %')
+
+        # Display as styled dataframe
+        st.dataframe(
+            pivot_df.style.background_gradient(cmap='RdYlGn', vmin=0, vmax=100).format("{:.0f}%"),
+            use_container_width=True
+        )
+
+        st.caption("Green = Complete | Yellow = In Progress | Red = Not Started")
+    else:
+        st.info("No data available for category performance heatmap.")
+
+    st.markdown("---")
+
+    # Section 5: Upcoming Deadlines Timeline
+    st.subheader("⏰ Upcoming Deadlines (Next 30 Days)")
+
+    upcoming_deadlines = db.get_upcoming_deadlines_all_properties(days=30)
+
+    if upcoming_deadlines:
+        # Group by property
+        current_property_name = None
+
+        for item in upcoming_deadlines:
+            if item['property_name'] != current_property_name:
+                current_property_name = item['property_name']
+                st.markdown(f"### {current_property_name}")
+
+            # Display deadline item
+            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+
+            with col1:
+                st.markdown(f"**{item['item_name']}**")
+
+            with col2:
+                st.caption(f"{item['category']}")
+
+            with col3:
+                # Color code by urgency
+                due_date = item['due_date']
+                from datetime import datetime, timedelta
+
+                if due_date:
+                    days_until = (datetime.strptime(due_date, '%Y-%m-%d') - datetime.now()).days
+
+                    if days_until < 0:
+                        st.markdown(f"🔴 **OVERDUE** ({abs(days_until)}d)")
+                    elif days_until <= 3:
+                        st.markdown(f"🟠 **{days_until}d** remaining")
+                    elif days_until <= 7:
+                        st.markdown(f"🟡 **{days_until}d** remaining")
+                    else:
+                        st.markdown(f"🟢 **{days_until}d** remaining")
+
+            with col4:
+                st.caption(f"Due: {item['due_date']}")
+
+            st.markdown("---")
+    else:
+        st.success("✅ No upcoming deadlines in the next 30 days!")
+
+def template_library_view():
+    """Display template library for browsing and managing DD checklist templates"""
+    st.title("📚 Template Library")
+
+    st.markdown("""
+    Browse and manage Due Diligence checklist templates. Apply templates to new properties
+    or save existing property checklists as reusable templates.
+    """)
+
+    st.markdown("---")
+
+    # Get all templates
+    templates = db.get_all_templates()
+
+    if not templates:
+        st.info("No templates available. Create your first template by saving a property's checklist.")
+    else:
+        # Display template count
+        st.subheader(f"Available Templates ({len(templates)})")
+
+        # Template cards in grid layout
+        for i in range(0, len(templates), 2):
+            cols = st.columns(2)
+
+            for idx, col in enumerate(cols):
+                template_idx = i + idx
+                if template_idx < len(templates):
+                    template = templates[template_idx]
+
+                    with col:
+                        with st.container():
+                            # Template card
+                            st.markdown(f"""
+                                <div style="background-color: #f8f9fa; padding: 16px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 16px;">
+                                    <div style="font-weight: 600; font-size: 16px; color: #1f2937;">{template['name']}</div>
+                                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                                        {template['asset_type'] if template['asset_type'] else 'General'}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                            # Get template items count
+                            template_items = db.get_template_items(template['id'])
+                            item_count = len(template_items)
+
+                            st.caption(f"📝 {item_count} checklist items")
+
+                            if template['description']:
+                                st.caption(f"ℹ️ {template['description']}")
+
+                            # Action buttons
+                            col1, col2, col3 = st.columns(3)
+
+                            with col1:
+                                if st.button("👁️ Preview", key=f"preview_{template['id']}", use_container_width=True):
+                                    st.session_state[f"show_preview_{template['id']}"] = not st.session_state.get(f"show_preview_{template['id']}", False)
+
+                            with col2:
+                                if st.button("📋 Apply", key=f"apply_{template['id']}", use_container_width=True):
+                                    st.session_state[f"show_apply_{template['id']}"] = not st.session_state.get(f"show_apply_{template['id']}", False)
+
+                            with col3:
+                                if template['id'] != 1:  # Don't allow deleting the default template
+                                    if st.button("🗑️ Delete", key=f"delete_{template['id']}", use_container_width=True):
+                                        st.session_state[f"confirm_delete_{template['id']}"] = True
+
+                            # Preview expandable section
+                            if st.session_state.get(f"show_preview_{template['id']}", False):
+                                with st.expander("📋 Template Items", expanded=True):
+                                    # Group by category
+                                    categories = {}
+                                    for item in template_items:
+                                        cat = item['category']
+                                        if cat not in categories:
+                                            categories[cat] = []
+                                        categories[cat].append(item)
+
+                                    for category, items in categories.items():
+                                        st.markdown(f"**{category}** ({len(items)} items)")
+                                        for item in items:
+                                            days_text = f" (Due in {item['default_due_days']} days)" if item['default_due_days'] else ""
+                                            st.markdown(f"- {item['item_name']}{days_text}")
+                                        st.markdown("")
+
+                            # Apply to property section
+                            if st.session_state.get(f"show_apply_{template['id']}", False):
+                                with st.expander("📋 Apply to Property", expanded=True):
+                                    st.markdown("Select a property to apply this template:")
+
+                                    properties = db.get_active_properties()
+                                    if properties:
+                                        property_options = {p['id']: f"{p['name']} ({p['asset_type']})" for p in properties}
+
+                                        selected_property = st.selectbox(
+                                            "Property:",
+                                            options=list(property_options.keys()),
+                                            format_func=lambda x: property_options[x],
+                                            key=f"apply_property_{template['id']}"
+                                        )
+
+                                        col1, col2 = st.columns(2)
+
+                                        with col1:
+                                            if st.button("✅ Apply Template", key=f"confirm_apply_{template['id']}", use_container_width=True):
+                                                try:
+                                                    db.apply_template_to_property(selected_property, template['id'])
+                                                    st.success(f"Template applied to {property_options[selected_property]}!")
+                                                    st.session_state[f"show_apply_{template['id']}"] = False
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Error applying template: {str(e)}")
+
+                                        with col2:
+                                            if st.button("Cancel", key=f"cancel_apply_{template['id']}", use_container_width=True):
+                                                st.session_state[f"show_apply_{template['id']}"] = False
+                                                st.rerun()
+                                    else:
+                                        st.warning("No active properties available. Create a property first.")
+
+                            # Delete confirmation
+                            if st.session_state.get(f"confirm_delete_{template['id']}", False):
+                                st.warning(f"⚠️ Delete template '{template['name']}'?")
+                                col1, col2 = st.columns(2)
+
+                                with col1:
+                                    if st.button("✅ Confirm Delete", key=f"confirm_delete_yes_{template['id']}", use_container_width=True):
+                                        try:
+                                            db.delete_template(template['id'])
+                                            st.success(f"Template '{template['name']}' deleted!")
+                                            st.session_state[f"confirm_delete_{template['id']}"] = False
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error deleting template: {str(e)}")
+
+                                with col2:
+                                    if st.button("Cancel", key=f"cancel_delete_{template['id']}", use_container_width=True):
+                                        st.session_state[f"confirm_delete_{template['id']}"] = False
+                                        st.rerun()
+
+                            st.markdown("---")
+
 # Sidebar navigation
 with st.sidebar:
     st.title("🏢 DD Tracker")
+
+    # Property Selection
+    st.markdown("### Property Selection")
+
+    properties = db.get_active_properties()
+
+    if properties:
+        # Get current property info
+        current_property = None
+        if st.session_state.current_property_id:
+            current_property = db.get_property_by_id(st.session_state.current_property_id)
+
+        # Display current property as a styled card
+        if current_property:
+            st.markdown(f"""
+                <div style="background-color: #f0f2f6; padding: 12px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 10px;">
+                    <div style="font-weight: 600; font-size: 14px; color: #1f2937;">{current_property['name']}</div>
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                        {current_property['asset_type'] if current_property['asset_type'] else 'No type'}
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # Property selector using radio buttons for better UX with 4-10 properties
+        if len(properties) <= 6:
+            # For 6 or fewer properties, use radio buttons (more visual)
+            property_options = {p['id']: f"{p['name']} ({p['asset_type']})" for p in properties}
+
+            selected_property_id = st.radio(
+                "Switch to:",
+                options=list(property_options.keys()),
+                format_func=lambda x: property_options[x],
+                key="property_selector",
+                index=list(property_options.keys()).index(st.session_state.current_property_id)
+                    if st.session_state.current_property_id in property_options else 0,
+                label_visibility="collapsed"
+            )
+        else:
+            # For 7+ properties, use searchable selectbox
+            property_names = {p['id']: f"{p['name']} - {p['asset_type']}" for p in properties}
+
+            selected_property_id = st.selectbox(
+                "Switch to:",
+                options=list(property_names.keys()),
+                format_func=lambda x: property_names[x],
+                key="property_selector",
+                index=list(property_names.keys()).index(st.session_state.current_property_id)
+                    if st.session_state.current_property_id in property_names else 0,
+                label_visibility="collapsed"
+            )
+
+        # Update session state if property changed
+        if selected_property_id != st.session_state.current_property_id:
+            st.session_state.current_property_id = selected_property_id
+            st.rerun()
+    else:
+        st.warning("No properties found")
+
+    st.markdown("---")
+
+    # New Property button
+    if st.button("➕ New Property", use_container_width=True):
+        st.session_state.show_new_property_form = True
+
+    # New Property Form (Modal-like)
+    if st.session_state.get('show_new_property_form', False):
+        st.markdown("---")
+        with st.form("new_property_form"):
+            st.subheader("Create New Property")
+
+            name = st.text_input("Property Name*")
+            address = st.text_input("Address")
+            asset_type = st.selectbox("Asset Type",
+                ["Office", "Retail", "Multifamily", "Industrial", "Mixed-Use", "Land", "Hospitality", "Other"])
+
+            apply_template = st.checkbox("Apply standard DD checklist", value=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                submitted = st.form_submit_button("Create", use_container_width=True)
+            with col2:
+                cancelled = st.form_submit_button("Cancel", use_container_width=True)
+
+            if submitted:
+                if not name:
+                    st.error("Property name required!")
+                else:
+                    # Create the property
+                    property_id = db.create_property(name, address, asset_type)
+
+                    # Apply template if requested
+                    if apply_template:
+                        templates = db.get_all_templates()
+                        if templates:
+                            # Use first template (standard template)
+                            db.apply_template_to_property(property_id, templates[0]['id'])
+
+                    # Set as current property
+                    st.session_state.current_property_id = property_id
+                    st.session_state.show_new_property_form = False
+                    st.success(f"Created: {name}")
+                    st.rerun()
+
+            if cancelled:
+                st.session_state.show_new_property_form = False
+                st.rerun()
+
+    st.markdown("---")
     st.markdown("### Navigation")
 
     if st.button("📊 Dashboard", use_container_width=True):
@@ -615,20 +1180,33 @@ with st.sidebar:
         st.session_state.show_add_form = False
         st.rerun()
 
+    if st.button("📊 Portfolio", use_container_width=True):
+        st.session_state.current_view = 'portfolio'
+        st.session_state.edit_item_id = None
+        st.session_state.show_add_form = False
+        st.rerun()
+
+    if st.button("📚 Templates", use_container_width=True):
+        st.session_state.current_view = 'templates'
+        st.session_state.edit_item_id = None
+        st.session_state.show_add_form = False
+        st.rerun()
+
     st.markdown("---")
 
-    # Quick stats in sidebar
-    stats = db.get_overall_stats()
-    total = stats['total']
-    complete = stats['complete']
-    completion_pct = (complete / total * 100) if total > 0 else 0
+    # Quick stats in sidebar (only show if property selected)
+    if st.session_state.current_property_id:
+        stats = db.get_overall_stats(st.session_state.current_property_id)
+        total = stats['total']
+        complete = stats['complete']
+        completion_pct = (complete / total * 100) if total > 0 else 0
 
-    st.markdown("### Quick Stats")
-    st.metric("Completion", f"{completion_pct:.0f}%")
-    st.metric("Items", f"{complete}/{total}")
+        st.markdown("### Quick Stats")
+        st.metric("Completion", f"{completion_pct:.0f}%")
+        st.metric("Items", f"{complete}/{total}")
 
-    if stats['flagged'] > 0:
-        st.warning(f"⚠️ {stats['flagged']} issue(s) flagged")
+        if stats['flagged'] > 0:
+            st.warning(f"⚠️ {stats['flagged']} issue(s) flagged")
 
     st.markdown("---")
     st.caption("Due Diligence Tracker v1.0")
@@ -641,3 +1219,7 @@ elif st.session_state.current_view == 'detail':
     detail_view()
 elif st.session_state.current_view == 'reports':
     reports_view()
+elif st.session_state.current_view == 'portfolio':
+    portfolio_view()
+elif st.session_state.current_view == 'templates':
+    template_library_view()
