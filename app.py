@@ -1072,38 +1072,23 @@ with st.sidebar:
                 <div style="background-color: #f0f2f6; padding: 12px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 10px;">
                     <div style="font-weight: 600; font-size: 14px; color: #1f2937;">{current_property['name']}</div>
                     <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                        {current_property['asset_type'] if current_property['asset_type'] else 'No type'}
+                        {current_property['address'] if current_property['address'] else ''}
+                        {('• ' + current_property['asset_type']) if current_property['asset_type'] else ''}
                     </div>
                 </div>
             """, unsafe_allow_html=True)
 
-        # Property selector using radio buttons for better UX with 4-10 properties
-        if len(properties) <= 6:
-            # For 6 or fewer properties, use radio buttons (more visual)
-            property_options = {p['id']: f"{p['name']} ({p['asset_type']})" for p in properties}
+        # Searchable dropdown for property selection (scales well for any portfolio size)
+        property_options = {p['id']: f"{p['name']} ({p['asset_type']})" for p in properties}
 
-            selected_property_id = st.radio(
-                "Switch to:",
-                options=list(property_options.keys()),
-                format_func=lambda x: property_options[x],
-                key="property_selector",
-                index=list(property_options.keys()).index(st.session_state.current_property_id)
-                    if st.session_state.current_property_id in property_options else 0,
-                label_visibility="collapsed"
-            )
-        else:
-            # For 7+ properties, use searchable selectbox
-            property_names = {p['id']: f"{p['name']} - {p['asset_type']}" for p in properties}
-
-            selected_property_id = st.selectbox(
-                "Switch to:",
-                options=list(property_names.keys()),
-                format_func=lambda x: property_names[x],
-                key="property_selector",
-                index=list(property_names.keys()).index(st.session_state.current_property_id)
-                    if st.session_state.current_property_id in property_names else 0,
-                label_visibility="collapsed"
-            )
+        selected_property_id = st.selectbox(
+            "Switch property:",
+            options=list(property_options.keys()),
+            format_func=lambda x: property_options[x],
+            key="property_selector",
+            index=list(property_options.keys()).index(st.session_state.current_property_id)
+                if st.session_state.current_property_id in property_options else 0
+        )
 
         # Update session state if property changed
         if selected_property_id != st.session_state.current_property_id:
