@@ -1068,13 +1068,18 @@ with st.sidebar:
 
         # Display current property as a styled card
         if current_property:
+            # Build subtitle from address and asset type
+            subtitle_parts = []
+            if current_property['address']:
+                subtitle_parts.append(current_property['address'])
+            if current_property['asset_type']:
+                subtitle_parts.append(current_property['asset_type'])
+            subtitle = " • ".join(subtitle_parts) if subtitle_parts else "No details"
+
             st.markdown(f"""
                 <div style="background-color: #f0f2f6; padding: 12px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 10px;">
                     <div style="font-weight: 600; font-size: 14px; color: #1f2937;">{current_property['name']}</div>
-                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                        {current_property['address'] if current_property['address'] else ''}
-                        {('• ' + current_property['asset_type']) if current_property['asset_type'] else ''}
-                    </div>
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">{subtitle}</div>
                 </div>
             """, unsafe_allow_html=True)
 
