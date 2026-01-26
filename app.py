@@ -97,6 +97,10 @@ if 'show_add_form' not in st.session_state:
     st.session_state.show_add_form = False
 if 'show_new_property_form' not in st.session_state:
     st.session_state.show_new_property_form = False
+if 'show_edit_property_form' not in st.session_state:
+    st.session_state.show_edit_property_form = False
+if 'show_delete_confirmation' not in st.session_state:
+    st.session_state.show_delete_confirmation = False
 if 'current_property_id' not in st.session_state:
     # Get the first active property as default
     active_properties = db.get_active_properties()
@@ -1156,6 +1160,81 @@ with st.sidebar:
             if cancelled:
                 st.session_state.show_new_property_form = False
                 st.rerun()
+
+    # Edit/Delete Property buttons (only show if a property is selected)
+    if st.session_state.current_property_id and properties:
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✏️ Edit", use_container_width=True, key="edit_property_btn"):
+                st.session_state.show_edit_property_form = True
+                st.session_state.show_delete_confirmation = False
+        with col2:
+            if st.button("🗑️ Delete", use_container_width=True, key="delete_property_btn"):
+                st.session_state.show_delete_confirmation = True
+                st.session_state.show_edit_property_form = False
+
+    # Edit Property Form
+    if st.session_state.get('show_edit_property_form', False) and st.session_state.current_property_id:
+        current_prop = db.get_property_by_id(st.session_state.current_property_id)
+        if current_prop:
+            st.markdown("---")
+            with st.form("edit_property_form"):
+                st.subheader("Edit Property")
+
+                edit_name = st.text_input("Property Name*", value=current_prop['name'])
+                edit_address = st.text_input("Address", value=current_prop['address'] or '')
+                asset_types = ["Office", "Retail", "Multifamily", "Industrial", "Mixed-Use", "Land", "Hospitality", "Other"]
+                current_type_index = asset_types.index(current_prop['asset_type']) if current_prop['asset_type'] in asset_types else 7
+                edit_asset_type = st.selectbox("Asset Type", asset_types, index=current_type_index)
+                status_options = ["Active", "On Hold", "Closed", "Cancelled"]
+                current_status_index = status_options.index(current_prop['status']) if current_prop['status'] in status_options else 0
+                edit_status = st.selectbox("Status", status_options, index=current_status_index)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    save_clicked = st.form_submit_button("Save", use_container_width=True)
+                with col2:
+                    cancel_edit = st.form_submit_button("Cancel", use_container_width=True)
+
+                if save_clicked:
+                    if not edit_name:
+                        st.error("Property name is required!")
+                    else:
+                        db.update_property(st.session_state.current_property_id, edit_name, edit_address, edit_asset_type, edit_status)
+                        st.session_state.show_edit_property_form = False
+                        st.success(f"Updated: {edit_name}")
+                        st.rerun()
+
+                if cancel_edit:
+                    st.session_state.show_edit_property_form = False
+                    st.rerun()
+
+    # Delete Property Confirmation
+    if st.session_state.get('show_delete_confirmation', False) and st.session_state.current_property_id:
+        current_prop = db.get_property_by_id(st.session_state.current_property_id)
+        if current_prop:
+            st.markdown("---")
+            st.error(f"⚠️ Delete '{current_prop['name']}'?")
+            st.caption("This will permanently delete the property and all its due diligence items.")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Yes, Delete", use_container_width=True, type="primary", key="confirm_delete"):
+                    property_name = current_prop['name']
+                    db.delete_property(st.session_state.current_property_id)
+                    # Switch to another property if available
+                    remaining = db.get_active_properties()
+                    if remaining:
+                        st.session_state.current_property_id = remaining[0]['id']
+                    else:
+                        st.session_state.current_property_id = None
+                    st.session_state.show_delete_confirmation = False
+                    st.success(f"Deleted: {property_name}")
+                    st.rerun()
+            with col2:
+                if st.button("Cancel", use_container_width=True, key="cancel_delete"):
+                    st.session_state.show_delete_confirmation = False
+                    st.rerun()
 
     st.markdown("---")
     st.markdown("### Navigation")
