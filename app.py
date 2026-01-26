@@ -835,8 +835,6 @@ def portfolio_view():
 
     if category_data:
         # Convert to DataFrame for easier manipulation
-        import pandas as pd
-
         df = pd.DataFrame([
             {
                 'Property': row['property_name'],

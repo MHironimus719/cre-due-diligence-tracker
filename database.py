@@ -536,7 +536,7 @@ def save_property_as_template(property_id, template_name, description=''):
                 try:
                     due_date = datetime.strptime(item['due_date'], "%Y-%m-%d")
                     days_offset = (due_date - base_date).days
-                except:
+                except (ValueError, TypeError):
                     days_offset = 30
             else:
                 days_offset = 30
